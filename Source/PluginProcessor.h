@@ -64,6 +64,12 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
 private:
+    // --- Punteros Atómicos para Acceso Rápido (Cache) ---
+    std::atomic<float>* thresholdParam = nullptr;
+    std::atomic<float>* ratioParam = nullptr;
+    std::atomic<float>* attackParam = nullptr;
+    std::atomic<float>* releaseParam = nullptr;
+
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilentRoomAudioProcessor)
 };

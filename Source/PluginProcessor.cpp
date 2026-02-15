@@ -13,14 +13,28 @@
 SilentRoomAudioProcessor::SilentRoomAudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
      : AudioProcessor (BusesProperties()
-                     .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                     .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                     #if ! JucePlugin_IsMidiEffect
+                      .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                     #endif
                        ),
-       // AQUI INICIALIZAMOS EL APVTS:
        apvts(*this, nullptr, "Parameters", createParameterLayout())
 #endif
 {
-    // El cuerpo del constructor puede estar vacío por ahora.
+    // --- FASE 2.3: CACHE DE PUNTEROS ---
+    // Conectamos los punteros locales a la memoria interna del APVTS.
+    // Esto es O(1) aquí, para que sea O(0) en el processBlock.
+
+    thresholdParam = apvts.getRawParameterValue("THRESHOLD");
+    ratioParam     = apvts.getRawParameterValue("RATIO");
+    attackParam    = apvts.getRawParameterValue("ATTACK");
+    releaseParam   = apvts.getRawParameterValue("RELEASE");
+
+    // SAFETY CHECK:
+    jassert(thresholdParam != nullptr);
+    jassert(ratioParam != nullptr);
+    jassert(attackParam != nullptr);
+    jassert(releaseParam != nullptr);
 }
 
 SilentRoomAudioProcessor::~SilentRoomAudioProcessor()
@@ -182,37 +196,35 @@ juce::AudioProcessorValueTreeState::ParameterLayout SilentRoomAudioProcessor::cr
 
 void SilentRoomAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
-    // 1. PROTECCIÓN FPU (Floating Point Unit)
-    // Evita que números extremadamente pequeños (denormals) consuman CPU innecesaria.
-    // Esto es estándar en la industria.
     juce::ScopedNoDenormals noDenormals;
-
-    // 2. DATOS DEL DAW
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // 3. LIMPIEZA DE CANALES BASURA (La lógica que discutimos)
-    // Si Entradas < Salidas (ej: Mono -> Stereo), limpiamos el exceso.
+    // Limpiar canales extra (rutina estándar)
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // 4. BUCLE PRINCIPAL DE PROCESAMIENTO
-    // Iteramos SOLO sobre los canales que tienen audio válido.
+    // --- FASE 2.3: LECTURA ATÓMICA (THREAD SAFE) ---
+    // Cargamos los valores en variables locales (Stack) para este bloque de audio.
+    // Si el usuario mueve el slider a mitad del bloque, el cambio se notará en el SIGUIENTE bloque.
+    // Esto es aceptable y deseable para evitar inconsistencias dentro del mismo buffer.
+    
+    float threshold = *thresholdParam;
+    float ratio = *ratioParam;
+    float attack = *attackParam;
+    float release = *releaseParam;
+
+    // AHORA MISMO: Estos valores no hacen nada. Son variables locales que se destruyen
+    // al final de la función. Pero ya los tienes listos para la matemática.
+
+    // ... Aquí irá tu bucle de audio (Fase 3) ...
+    /*
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
     {
-        // Obtenemos el puntero de escritura directo a la RAM de audio.
         auto* channelData = buffer.getWritePointer (channel);
-
-        // --- AQUÍ IRÁ EL DSP (Fase 3) ---
-        // Por ahora, el plugin actúa como un cable transparente (Pass-Through).
-        // El audio entra y sale sin cambios.
-        
-        /* NOTA: Para probar que controlas el audio, puedes descomentar 
-           la siguiente línea temporalmente para silenciar todo:
-           
-           juce::FloatVectorOperations::clear(channelData, buffer.getNumSamples());
-        */
+        // ...
     }
+    */
 }
 
 //==============================================================================
