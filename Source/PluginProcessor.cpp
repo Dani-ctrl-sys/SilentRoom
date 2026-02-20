@@ -216,50 +216,58 @@ void SilentRoomAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const float alphaAttack  = std::exp (-1.0f / static_cast<float>(attackMs  * 0.001 * sr));
     const float alphaRelease = std::exp (-1.0f / static_cast<float>(releaseMs * 0.001 * sr));
 
-    const int numSamples  = buffer.getNumSamples();
-    const int numChannels = totalNumInputChannels;
+    const int numSamples = buffer.getNumSamples();
+
+    // --- CACHE DE PUNTEROS DE CANAL (fuera del bucle de muestras) ---
+    auto* leftChannel  = buffer.getWritePointer (0);
+    auto* rightChannel = (totalNumInputChannels > 1) ? buffer.getWritePointer (1) : nullptr;
 
     // Valor máximo de GR en este bloque (para el medidor de la GUI)
     float maxGR = 0.0f;
+
+    // Umbral mínimo de nivel lineal para evitar log10(0)
+    constexpr float kMinLinearLevel = 1.0e-10f;  // ~-200 dB
 
     // --- BUCLE DE MUESTRAS ---
     for (int sample = 0; sample < numSamples; ++sample)
     {
         // 1. Detección de nivel: Peak estéreo enlazado (máximo de ambos canales)
-        float peakLevel = 0.0f;
-        for (int ch = 0; ch < numChannels; ++ch)
+        float peakLevel = std::fabs (leftChannel[sample]);
+
+        if (rightChannel != nullptr)
         {
-            const float absSample = std::fabs (buffer.getReadPointer (ch)[sample]);
-            if (absSample > peakLevel)
-                peakLevel = absSample;
+            const float rightAbs = std::fabs (rightChannel[sample]);
+            if (rightAbs > peakLevel)
+                peakLevel = rightAbs;
         }
 
-        // 2. Convertir nivel peak a dB
+        // 2. Protección matemática + conversión a dB
+        peakLevel = std::fmax (peakLevel, kMinLinearLevel);
         const float levelDb = juce::Decibels::gainToDecibels (peakLevel, -100.0f);
 
-        // 3. Gain Computer: calcular la reducción de ganancia objetivo (en dB, <= 0)
-        float targetGR = 0.0f; // sin atenuación por defecto
+        // 3. Gain Computer: reducción de ganancia objetivo (en dB, <= 0)
+        float targetGR = 0.0f;
 
         if (levelDb < threshold)
         {
-            // Cantidad que estamos por debajo del threshold
-            const float belowThreshold = threshold - levelDb;  // positivo
-            // GR = belowThreshold * (1 - 1/ratio)  →  negativo (atenuación)
+            const float belowThreshold = threshold - levelDb;
             targetGR = -belowThreshold * (1.0f - (1.0f / ratio));
         }
 
         // 4. Balística Attack/Release con filtro de un polo
-        const float alpha = (targetGR < envelope) ? alphaAttack : alphaRelease;
+        //    GATE: Attack = puerta se ABRE (envelope sube hacia 0 dB)
+        //           Release = puerta se CIERRA (envelope baja hacia -N dB)
+        const float alpha = (targetGR > envelope) ? alphaAttack : alphaRelease;
         envelope = targetGR + alpha * (envelope - targetGR);
 
         // 5. Convertir GR suavizada de dB a factor lineal
         const float gainLinear = juce::Decibels::decibelsToGain (envelope, -100.0f);
 
         // 6. Aplicar ganancia a todos los canales
-        for (int ch = 0; ch < numChannels; ++ch)
-        {
-            buffer.getWritePointer (ch)[sample] *= gainLinear;
-        }
+        leftChannel[sample] *= gainLinear;
+
+        if (rightChannel != nullptr)
+            rightChannel[sample] *= gainLinear;
 
         // 7. Tracking del máximo GR para el medidor GUI
         if (envelope < maxGR)
