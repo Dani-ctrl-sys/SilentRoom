@@ -70,6 +70,12 @@ private:
     std::atomic<float>* attackParam = nullptr;
     std::atomic<float>* releaseParam = nullptr;
 
+    // --- Estado del Seguidor de Envolvente (Noise Gate DSP) ---
+    float envelope = 0.0f;  // Envolvente de ganancia suavizada (en dB, valor <= 0)
+
+    // --- Reducción de Ganancia para GUI (Fase 4) ---
+    std::atomic<float> gainReduction { 0.0f };
+
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilentRoomAudioProcessor)
 };

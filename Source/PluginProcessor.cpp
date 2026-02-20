@@ -106,8 +106,9 @@ void SilentRoomAudioProcessor::changeProgramName (int index, const juce::String&
 //==============================================================================
 void SilentRoomAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
+    // Reiniciar estado del seguidor de envolvente al preparar la reproducción
+    envelope = 0.0f;
+    gainReduction.store (0.0f, std::memory_order_relaxed);
 }
 
 void SilentRoomAudioProcessor::releaseResources()
@@ -204,27 +205,69 @@ void SilentRoomAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // --- FASE 2.3: LECTURA ATÓMICA (THREAD SAFE) ---
-    // Cargamos los valores en variables locales (Stack) para este bloque de audio.
-    // Si el usuario mueve el slider a mitad del bloque, el cambio se notará en el SIGUIENTE bloque.
-    // Esto es aceptable y deseable para evitar inconsistencias dentro del mismo buffer.
-    
-    float threshold = *thresholdParam;
-    float ratio = *ratioParam;
-    float attack = *attackParam;
-    float release = *releaseParam;
+    // --- LECTURA ATÓMICA DE PARÁMETROS (LOCK-FREE) ---
+    const float threshold = thresholdParam->load (std::memory_order_relaxed);  // dB
+    const float ratio     = ratioParam->load     (std::memory_order_relaxed);  // N:1
+    const float attackMs  = attackParam->load     (std::memory_order_relaxed);  // ms
+    const float releaseMs = releaseParam->load    (std::memory_order_relaxed);  // ms
 
-    // AHORA MISMO: Estos valores no hacen nada. Son variables locales que se destruyen
-    // al final de la función. Pero ya los tienes listos para la matemática.
+    // --- COEFICIENTES DE BALÍSTICA (fuera del bucle de muestras) ---
+    const double sr = getSampleRate();
+    const float alphaAttack  = std::exp (-1.0f / static_cast<float>(attackMs  * 0.001 * sr));
+    const float alphaRelease = std::exp (-1.0f / static_cast<float>(releaseMs * 0.001 * sr));
 
-    // ... Aquí irá tu bucle de audio (Fase 3) ...
-    /*
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    const int numSamples  = buffer.getNumSamples();
+    const int numChannels = totalNumInputChannels;
+
+    // Valor máximo de GR en este bloque (para el medidor de la GUI)
+    float maxGR = 0.0f;
+
+    // --- BUCLE DE MUESTRAS ---
+    for (int sample = 0; sample < numSamples; ++sample)
     {
-        auto* channelData = buffer.getWritePointer (channel);
-        // ...
+        // 1. Detección de nivel: Peak estéreo enlazado (máximo de ambos canales)
+        float peakLevel = 0.0f;
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            const float absSample = std::fabs (buffer.getReadPointer (ch)[sample]);
+            if (absSample > peakLevel)
+                peakLevel = absSample;
+        }
+
+        // 2. Convertir nivel peak a dB
+        const float levelDb = juce::Decibels::gainToDecibels (peakLevel, -100.0f);
+
+        // 3. Gain Computer: calcular la reducción de ganancia objetivo (en dB, <= 0)
+        float targetGR = 0.0f; // sin atenuación por defecto
+
+        if (levelDb < threshold)
+        {
+            // Cantidad que estamos por debajo del threshold
+            const float belowThreshold = threshold - levelDb;  // positivo
+            // GR = belowThreshold * (1 - 1/ratio)  →  negativo (atenuación)
+            targetGR = -belowThreshold * (1.0f - (1.0f / ratio));
+        }
+
+        // 4. Balística Attack/Release con filtro de un polo
+        const float alpha = (targetGR < envelope) ? alphaAttack : alphaRelease;
+        envelope = targetGR + alpha * (envelope - targetGR);
+
+        // 5. Convertir GR suavizada de dB a factor lineal
+        const float gainLinear = juce::Decibels::decibelsToGain (envelope, -100.0f);
+
+        // 6. Aplicar ganancia a todos los canales
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            buffer.getWritePointer (ch)[sample] *= gainLinear;
+        }
+
+        // 7. Tracking del máximo GR para el medidor GUI
+        if (envelope < maxGR)
+            maxGR = envelope;
     }
-    */
+
+    // Publicar la reducción de ganancia máxima del bloque (valor negativo en dB)
+    gainReduction.store (maxGR, std::memory_order_relaxed);
 }
 
 //==============================================================================
