@@ -63,6 +63,10 @@ private:
 public:
     juce::AudioProcessorValueTreeState apvts;
 
+    // --- Reducción de Ganancia para GUI (Fase 4) ---
+    // Público para que el Editor pueda leerlo para el medidor de GR.
+    std::atomic<float> gainReduction { 0.0f };
+
 private:
     // --- Punteros Atómicos para Acceso Rápido (Cache) ---
     std::atomic<float>* thresholdParam = nullptr;
@@ -72,9 +76,6 @@ private:
 
     // --- Estado del Seguidor de Envolvente (Noise Gate DSP) ---
     float envelope = 0.0f;  // Envolvente de ganancia suavizada (en dB, valor <= 0)
-
-    // --- Reducción de Ganancia para GUI (Fase 4) ---
-    std::atomic<float> gainReduction { 0.0f };
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SilentRoomAudioProcessor)
